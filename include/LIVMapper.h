@@ -172,6 +172,8 @@ public:
   ros::Publisher pubLaserCloudDyn;
   ros::Publisher pubLaserCloudDynRmed;
   ros::Publisher pubLaserCloudDynDbg;
+  ros::Publisher pub_lidar_pose_;
+  ros::Publisher pub_laser_cloud_undistort;
   image_transport::Publisher pubImage;
   ros::Publisher mavros_pose_publisher;
   ros::Timer imu_prop_timer;

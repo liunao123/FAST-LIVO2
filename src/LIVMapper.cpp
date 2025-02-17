@@ -41,7 +41,7 @@ LIVMapper::LIVMapper(ros::NodeHandle &nh)
   initializeFiles();
   initializeComponents();
   path.header.stamp = ros::Time::now();
-  path.header.frame_id = "camera_init";
+  path.header.frame_id = "odom";
 }
 
 LIVMapper::~LIVMapper() {}
@@ -205,7 +205,10 @@ void LIVMapper::initializeSubscribersAndPublishers(ros::NodeHandle &nh, image_tr
   pubImage = it.advertise("/rgb_img", 1);
   pubImuPropOdom = nh.advertise<nav_msgs::Odometry>("/LIVO2/imu_propagate", 10000);
   imu_prop_timer = nh.createTimer(ros::Duration(0.004), &LIVMapper::imu_prop_callback, this);
-  voxelmap_manager->voxel_map_pub_= nh.advertise<visualization_msgs::MarkerArray>("/planes", 10000);
+
+  pub_lidar_pose_ = nh.advertise<geometry_msgs::PoseStamped>("lidar_pose", 100000);
+  pub_laser_cloud_undistort = nh.advertise<sensor_msgs::PointCloud2>("undistort_laser", 100000);
+
 }
 
 void LIVMapper::handleFirstFrame() 
@@ -339,6 +342,12 @@ void LIVMapper::handleLIO()
 
   double t0 = omp_get_wtime();
 
+  sensor_msgs::PointCloud2 lasertemp;
+  pcl::toROSMsg(*feats_undistort, lasertemp);
+  lasertemp.header.stamp = ros::Time().fromSec(last_timestamp_lidar);
+  lasertemp.header.frame_id = "lidar";
+  pub_laser_cloud_undistort.publish(lasertemp);
+
   downSizeFilterSurf.setInputCloud(feats_undistort);
   downSizeFilterSurf.filter(*feats_down_body);
   
@@ -421,6 +430,11 @@ void LIVMapper::handleLIO()
   if(voxelmap_manager->config_setting_.map_sliding_en)
   {
     voxelmap_manager->mapSliding();
+    // if() 
+    // {
+    //   // update_local_voxel_map();
+    // }
+    // publish_local_voxelmap(local_voxel_clouds_publisher);
   }
   
   PointCloudXYZI::Ptr laserCloudFullRes(dense_map_en ? feats_undistort : feats_down_body);
@@ -766,14 +780,14 @@ void LIVMapper::imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
     return;
   }
 
-  // if (last_timestamp_imu > 0.0 && timestamp > last_timestamp_imu + 0.2)
-  // {
+  if (last_timestamp_imu > 0.0 && timestamp > last_timestamp_imu + 0.2)
+  {
 
-  //   ROS_WARN("imu time stamp Jumps %0.4lf seconds \n", timestamp - last_timestamp_imu);
-  //   mtx_buffer.unlock();
-  //   sig_buffer.notify_all();
-  //   return;
-  // }
+    ROS_WARN("imu time stamp Jumps %0.4lf seconds \n", timestamp - last_timestamp_imu);
+    mtx_buffer.unlock();
+    sig_buffer.notify_all();
+    return;
+  }
 
   last_timestamp_imu = timestamp;
 
@@ -1071,7 +1085,7 @@ void LIVMapper::publish_img_rgb(const image_transport::Publisher &pubImage, VIOM
   cv::Mat img_rgb = vio_manager->img_cp;
   cv_bridge::CvImage out_msg;
   out_msg.header.stamp = ros::Time::now();
-  // out_msg.header.frame_id = "camera_init";
+  // out_msg.header.frame_id = "odom";
   out_msg.encoding = sensor_msgs::image_encodings::BGR8;
   out_msg.image = img_rgb;
   pubImage.publish(out_msg.toImageMsg());
@@ -1138,7 +1152,7 @@ void LIVMapper::publish_frame_world(const ros::Publisher &pubLaserCloudFullRes, 
     pcl::toROSMsg(*pcl_w_wait_pub, laserCloudmsg); 
   }
   laserCloudmsg.header.stamp = ros::Time::now(); //.fromSec(last_timestamp_lidar);
-  laserCloudmsg.header.frame_id = "camera_init";
+  laserCloudmsg.header.frame_id = "odom";
   pubLaserCloudFullRes.publish(laserCloudmsg);
 
   /**************** save map ****************/
@@ -1189,7 +1203,7 @@ void LIVMapper::publish_visual_sub_map(const ros::Publisher &pubSubVisualMap)
     sensor_msgs::PointCloud2 laserCloudmsg;
     pcl::toROSMsg(*sub_pcl_visual_map_pub, laserCloudmsg);
     laserCloudmsg.header.stamp = ros::Time::now();
-    laserCloudmsg.header.frame_id = "camera_init";
+    laserCloudmsg.header.frame_id = "odom";
     pubSubVisualMap.publish(laserCloudmsg);
   }
 }
@@ -1207,7 +1221,7 @@ void LIVMapper::publish_effect_world(const ros::Publisher &pubLaserCloudEffect, 
   sensor_msgs::PointCloud2 laserCloudFullRes3;
   pcl::toROSMsg(*laserCloudWorld, laserCloudFullRes3);
   laserCloudFullRes3.header.stamp = ros::Time::now();
-  laserCloudFullRes3.header.frame_id = "camera_init";
+  laserCloudFullRes3.header.frame_id = "odom";
   pubLaserCloudEffect.publish(laserCloudFullRes3);
 }
 
@@ -1224,9 +1238,10 @@ template <typename T> void LIVMapper::set_posestamp(T &out)
 
 void LIVMapper::publish_odometry(const ros::Publisher &pubOdomAftMapped)
 {
-  odomAftMapped.header.frame_id = "camera_init";
-  odomAftMapped.child_frame_id = "aft_mapped";
-  odomAftMapped.header.stamp = ros::Time::now(); //.ros::Time()fromSec(last_timestamp_lidar);
+  odomAftMapped.header.frame_id = "odom";
+  odomAftMapped.child_frame_id = "imu";
+  // odomAftMapped.header.stamp = ros::Time::now(); //.ros::Time()fromSec(last_timestamp_lidar);
+  odomAftMapped.header.stamp = ros::Time().fromSec(last_timestamp_lidar);
   set_posestamp(odomAftMapped.pose.pose);
 
   static tf::TransformBroadcaster br;
@@ -1238,14 +1253,52 @@ void LIVMapper::publish_odometry(const ros::Publisher &pubOdomAftMapped)
   q.setY(geoQuat.y);
   q.setZ(geoQuat.z);
   transform.setRotation(q);
-  br.sendTransform( tf::StampedTransform(transform, odomAftMapped.header.stamp, "camera_init", "aft_mapped") );
+  br.sendTransform( tf::StampedTransform(transform, odomAftMapped.header.stamp, "odom", "imu") );
   pubOdomAftMapped.publish(odomAftMapped);
+
+  // 提取位姿的姿态
+  Eigen::Vector3d translation(odomAftMapped.pose.pose.position.x, odomAftMapped.pose.pose.position.y, odomAftMapped.pose.pose.position.z);
+  Eigen::Quaterniond quaternion(odomAftMapped.pose.pose.orientation.w, odomAftMapped.pose.pose.orientation.x, odomAftMapped.pose.pose.orientation.y, odomAftMapped.pose.pose.orientation.z);
+  Eigen::Matrix3d rotationMatrix = quaternion.normalized().toRotationMatrix();
+
+  Eigen::Vector3d T_lidar = rotationMatrix * extT + translation; // 平移 分量
+  Eigen::Matrix3d R_lidar = rotationMatrix * extR;               // 旋转 分量
+  Eigen::Quaterniond R_lidar_quat(R_lidar);
+  R_lidar_quat.normalize();
+
+  geometry_msgs::PoseStamped lidar_pose;
+  lidar_pose.header = odomAftMapped.header;
+  lidar_pose.header.frame_id = "odom";
+  lidar_pose.pose.position.x = T_lidar(0);
+  lidar_pose.pose.position.y = T_lidar(1);
+  lidar_pose.pose.position.z = T_lidar(2);
+  lidar_pose.pose.orientation.x = R_lidar_quat.x();
+  lidar_pose.pose.orientation.y = R_lidar_quat.y();
+  lidar_pose.pose.orientation.z = R_lidar_quat.z();
+  lidar_pose.pose.orientation.w = R_lidar_quat.w();
+  pub_lidar_pose_.publish(lidar_pose);
+
+  static std::ofstream lio_path_file("/home/map/fast_livo2_path.txt", std::ios::out);
+  lio_path_file.open("/home/map/fast_livo2_path.txt", std::ios::app);
+  lio_path_file.setf(std::ios::fixed, std::ios::floatfield);
+  lio_path_file.precision(10);
+  lio_path_file << last_timestamp_lidar << " ";
+  lio_path_file.precision(5);
+  lio_path_file
+      << lidar_pose.pose.position.x << " "
+      << lidar_pose.pose.position.y << " "
+      << lidar_pose.pose.position.z << " "
+      << lidar_pose.pose.orientation.x << " "
+      << lidar_pose.pose.orientation.y << " "
+      << lidar_pose.pose.orientation.z << " "
+      << lidar_pose.pose.orientation.w << std::endl;
+  lio_path_file.close();
 }
 
 void LIVMapper::publish_mavros(const ros::Publisher &mavros_pose_publisher)
 {
   msg_body_pose.header.stamp = ros::Time::now();
-  msg_body_pose.header.frame_id = "camera_init";
+  msg_body_pose.header.frame_id = "odom";
   set_posestamp(msg_body_pose.pose);
   mavros_pose_publisher.publish(msg_body_pose);
 }
@@ -1254,7 +1307,7 @@ void LIVMapper::publish_path(const ros::Publisher pubPath)
 {
   set_posestamp(msg_body_pose.pose);
   msg_body_pose.header.stamp = ros::Time::now();
-  msg_body_pose.header.frame_id = "camera_init";
+  msg_body_pose.header.frame_id = "odom";
   path.poses.push_back(msg_body_pose);
   pubPath.publish(path);
 }
