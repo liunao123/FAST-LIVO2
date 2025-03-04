@@ -1,5 +1,5 @@
 common:
-  img_topic: "/left_camera/image"
+  img_topic: "/hk_camera/image_color"
   lid_topic: "/livox/lidar"
   imu_topic: "/livox/imu"
   img_en: 1
@@ -8,15 +8,32 @@ common:
 
 extrin_calib:
   extrinsic_T: [0.04165, 0.02326, -0.0284]
-  extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1] 
+  extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+  # 20241107 
+  # direct_visual_lidar_calibrate 
+  # Roll : 178.945 , Pitch : -179.824 , Yaw : 179.958
+  # Rcl: [  0.00361801 ,  -0.999867 , -0.0159037 , 
+  #        -0.00788998 ,  0.0158748 ,  -0.999843 ,
+  #         0.999962 , 0.00374293 , -0.0078315 ]
+  # Pcl: [ -0.0148726, 0.074121, -0.0760439 ]
+  # Pcl: [ 0.0, 0.0, 0.0760439 ]
+
+  # nc_x8.bag
   Rcl: [ 0.0161775 , -0.999735 ,-0.0163792, 
         -0.0438769 , 0.0156558 , -0.998914, 
           0.998906 , 0.0168786 , -0.043612]
   Pcl: [-0.0242812, -0.0718288, -0.0921109]
 
+  # # v1_avia_hk_sync_E2.bag
+  # Rcl: [  0.0288810 ,  -0.9994270 , -0.0176385 ,
+  #        -0.0117679 ,   0.0173046 , -0.9997810 ,
+  #         0.9995140 ,   0.0290823 , -0.0112614 ]
+  # Pcl: [-0.00429101 ,  -0.0194753 , -0.00845176]
+
+
 time_offset: 
   imu_time_offset: 0.0
-  img_time_offset: 0.1
+  img_time_offset: 0.0
   exposure_time_init: 0.0
 
 preprocess:
@@ -24,7 +41,7 @@ preprocess:
   filter_size_surf: 0.1
   lidar_type: 1 # Livox Avia LiDAR
   scan_line: 6
-  blind: 0.8
+  blind: 0.75
 
 vio:
   max_iterations: 5
@@ -33,14 +50,14 @@ vio:
   patch_size: 8
   patch_pyrimid_level: 4
   normal_en: true
-  raycast_en: false
+  raycast_en: true
   inverse_composition_en: false
   exposure_estimate_en: true
   inv_expo_cov: 0.1
 
 imu:
   imu_en: true
-  imu_int_frame: 30
+  imu_int_frame: 200  #30
   acc_cov: 0.5 # 0.2
   gyr_cov: 0.3 # 0.5
   b_acc_cov: 0.0001 # 0.1
@@ -57,7 +74,7 @@ lio:
   layer_init_num: [5, 5, 5, 5, 5]
 
 local_map:  
-  map_sliding_en: false
+  map_sliding_en: true
   half_map_size: 100
   sliding_thresh: 8
 
@@ -77,7 +94,7 @@ evo:
   pose_output_en: false
 
 pcd_save:
-  pcd_save_en: false
+  pcd_save_en: true
   colmap_output_en: false # need to set interval = -1
   filter_size_pcd: 0.15
   interval: -1

@@ -78,7 +78,7 @@ void LIVMapper::readParameters(ros::NodeHandle &nh)
   nh.param<bool>("evo/pose_output_en", pose_output_en, false);
   nh.param<double>("imu/gyr_cov", gyr_cov, 1.0);
   nh.param<double>("imu/acc_cov", acc_cov, 1.0);
-  nh.param<int>("imu/imu_int_frame", imu_int_frame, 3);
+  nh.param<int>("imu/imu_int_frame", imu_int_frame, 200);
   nh.param<bool>("imu/imu_en", imu_en, false);
   nh.param<bool>("imu/gravity_est_en", gravity_est_en, true);
   nh.param<bool>("imu/ba_bg_est_en", ba_bg_est_en, true);
@@ -207,6 +207,7 @@ void LIVMapper::initializeSubscribersAndPublishers(ros::NodeHandle &nh, image_tr
   imu_prop_timer = nh.createTimer(ros::Duration(0.004), &LIVMapper::imu_prop_callback, this);
 
   pub_lidar_pose_ = nh.advertise<geometry_msgs::PoseStamped>("lidar_pose", 100000);
+  pub_lidar_odom_ = nh.advertise<nav_msgs::Odometry>("lidar_odom", 100000);
   pub_laser_cloud_undistort = nh.advertise<sensor_msgs::PointCloud2>("undistort_laser", 100000);
 
 }
@@ -1151,7 +1152,8 @@ void LIVMapper::publish_frame_world(const ros::Publisher &pubLaserCloudFullRes, 
   { 
     pcl::toROSMsg(*pcl_w_wait_pub, laserCloudmsg); 
   }
-  laserCloudmsg.header.stamp = ros::Time::now(); //.fromSec(last_timestamp_lidar);
+  laserCloudmsg.header.stamp = ros::Time().fromSec(last_timestamp_lidar);
+  // laserCloudmsg.header.stamp = ros::Time::now(); //.fromSec(last_timestamp_lidar);
   laserCloudmsg.header.frame_id = "odom";
   pubLaserCloudFullRes.publish(laserCloudmsg);
 
@@ -1266,6 +1268,13 @@ void LIVMapper::publish_odometry(const ros::Publisher &pubOdomAftMapped)
   Eigen::Quaterniond R_lidar_quat(R_lidar);
   R_lidar_quat.normalize();
 
+  // 第一个lidar pose就是外参
+  static Eigen::Matrix3d first_lidar_pose_r = R_lidar;
+  static Eigen::Vector3d first_lidar_pose_t = T_lidar;
+  //  lidar的位姿全部统一到第一帧lidar的位姿上
+  R_lidar = first_lidar_pose_r.inverse() * R_lidar;
+  T_lidar = first_lidar_pose_r.inverse() * (T_lidar - first_lidar_pose_t);
+
   geometry_msgs::PoseStamped lidar_pose;
   lidar_pose.header = odomAftMapped.header;
   lidar_pose.header.frame_id = "odom";
@@ -1277,6 +1286,47 @@ void LIVMapper::publish_odometry(const ros::Publisher &pubOdomAftMapped)
   lidar_pose.pose.orientation.z = R_lidar_quat.z();
   lidar_pose.pose.orientation.w = R_lidar_quat.w();
   pub_lidar_pose_.publish(lidar_pose);
+
+  static auto last_lidar_pose_R = R_lidar;
+
+  // publish lidar odometry
+  nav_msgs::Odometry lidar_odom;
+
+  lidar_odom.header = odomAftMapped.header;
+  lidar_odom.child_frame_id = "lidar";
+  lidar_odom.pose.pose = lidar_pose.pose;
+
+  // header.frame_id 坐标系下的速度转到 child_frame_id 坐标系下
+  // P_w = T_wi * P_i 对 时间求导
+  // V_w = R_wi * V_i // T_wi里面的平移部分求导被消除了
+  // auto V_linear_child_frame_id = quaternion.inverse() * _state.vel_end;
+  auto V_linear_child_frame_id = quaternion.inverse().toRotationMatrix() * _state.vel_end;
+  // 
+  lidar_odom.twist.twist.linear.x = V_linear_child_frame_id.x();
+  lidar_odom.twist.twist.linear.y = V_linear_child_frame_id.y();
+  lidar_odom.twist.twist.linear.z = V_linear_child_frame_id.z();
+
+  // 两个相邻位姿的相对姿态的变换 然后得到角速度
+  Eigen::Quaterniond delta_quaternion(last_lidar_pose_R.inverse() * R_lidar);
+  // Eigen::Vector3d eulerAngle_ab = delta_quaternion.matrix().eulerAngles(2,1,0); // 第一个是 绕 z 的角速度
+  // lidar_odom.twist.twist.angular.x = 10.0 *  eulerAngle_ab(2) ; // eulerAngle_ab.z();
+  // lidar_odom.twist.twist.angular.y = 10.0 *  eulerAngle_ab(1) ; // eulerAngle_ab.y();
+  // lidar_odom.twist.twist.angular.z = 10.0 *  eulerAngle_ab(0) ; // eulerAngle_ab.x();
+
+  // HKU的旋转矩阵转欧拉角 消除EIGEN自带的有奇异性
+  Eigen::Matrix3d eulerAngle_ab = delta_quaternion.matrix();
+  Eigen::Vector3d n = eulerAngle_ab.col(0);
+  Eigen::Vector3d o = eulerAngle_ab.col(1);
+  Eigen::Vector3d a = eulerAngle_ab.col(2);
+  double y = std::atan2(n(1), n(0));
+  double p = std::atan2(-n(2), n(0) * cos(y) + n(1) * sin(y));
+  double r = std::atan2(a(0) * sin(y) - a(1) * cos(y), -o(0) * sin(y) + o(1) * cos(y));
+  lidar_odom.twist.twist.angular.x = 10.0 * r;
+  lidar_odom.twist.twist.angular.y = 10.0 * p;
+  lidar_odom.twist.twist.angular.z = 10.0 * y;
+  pub_lidar_odom_.publish(lidar_odom);
+
+  last_lidar_pose_R = R_lidar;
 
   static std::ofstream lio_path_file("/home/map/fast_livo2_path.txt", std::ios::out);
   lio_path_file.open("/home/map/fast_livo2_path.txt", std::ios::app);
