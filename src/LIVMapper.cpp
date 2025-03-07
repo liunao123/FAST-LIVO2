@@ -345,12 +345,6 @@ void LIVMapper::handleLIO()
 
   double t0 = omp_get_wtime();
 
-  sensor_msgs::PointCloud2 lasertemp;
-  pcl::toROSMsg(*feats_undistort, lasertemp);
-  lasertemp.header.stamp = ros::Time().fromSec(last_timestamp_lidar);
-  lasertemp.header.frame_id = "lidar";
-  pub_laser_cloud_undistort.publish(lasertemp);
-
   downSizeFilterSurf.setInputCloud(feats_undistort);
   downSizeFilterSurf.filter(*feats_down_body);
   
@@ -409,7 +403,13 @@ void LIVMapper::handleLIO()
   
   euler_cur = RotMtoEuler(_state.rot_end);
   geoQuat = tf::createQuaternionMsgFromRollPitchYaw(euler_cur(0), euler_cur(1), euler_cur(2));
-  publish_odometry(pubOdomAftMapped);
+  
+  publish_odometry(pubOdomAftMapped, LidarMeasures.last_lio_update_time);
+  sensor_msgs::PointCloud2 lasertemp;
+  pcl::toROSMsg(*feats_undistort, lasertemp);
+  lasertemp.header.stamp = ros::Time().fromSec(LidarMeasures.last_lio_update_time);
+  lasertemp.header.frame_id = "lidar";
+  pub_laser_cloud_undistort.publish(lasertemp);
 
   double t3 = omp_get_wtime();
 
@@ -1282,12 +1282,12 @@ template <typename T> void LIVMapper::set_posestamp(T &out)
   out.orientation.w = geoQuat.w;
 }
 
-void LIVMapper::publish_odometry(const ros::Publisher &pubOdomAftMapped)
+void LIVMapper::publish_odometry(const ros::Publisher &pubOdomAftMapped, const double &lidar_time)
 {
   odomAftMapped.header.frame_id = "odom";
   odomAftMapped.child_frame_id = "imu";
   // odomAftMapped.header.stamp = ros::Time::now(); //.ros::Time()fromSec(last_timestamp_lidar);
-  odomAftMapped.header.stamp = ros::Time().fromSec(last_timestamp_lidar);
+  odomAftMapped.header.stamp = ros::Time().fromSec(lidar_time);
   set_posestamp(odomAftMapped.pose.pose);
 
   static tf::TransformBroadcaster br;
@@ -1376,7 +1376,7 @@ void LIVMapper::publish_odometry(const ros::Publisher &pubOdomAftMapped)
   lio_path_file.open("/home/map/fast_livo2_path.txt", std::ios::app);
   lio_path_file.setf(std::ios::fixed, std::ios::floatfield);
   lio_path_file.precision(10);
-  lio_path_file << last_timestamp_lidar << " ";
+  lio_path_file << lidar_time << " ";
   lio_path_file.precision(5);
   lio_path_file
       << lidar_pose.pose.position.x << " "
